@@ -11,6 +11,7 @@ mongoose.connect(process.env.DB_URI, {
 
 const userSchema = new mongoose.Schema({
   username: String,
+  fullname: String,
   password: String,
   issuedBooks: [
     {
@@ -23,6 +24,16 @@ const userSchema = new mongoose.Schema({
       }
     },
   ],
+  email: {
+    type: String,
+    unique: true,
+    trim: true,
+    lowercase: true
+  },
+  password: {
+    type: String,
+  },
+  picture:String,
   numberOfIssuedBooks: Number,
   signedIn: Boolean,
   isAdmin: {

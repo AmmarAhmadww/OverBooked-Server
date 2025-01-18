@@ -13,6 +13,7 @@ const adminAuth = require('../middleware/adminAuth');
 const User = require("../models/userModel");
 const Library = require("../models/libraryModel");
 const authenticationController = require("../controllers/authenticationController");
+const oauth = require("../controllers/oauth");
 const Notification = require("../models/notificationModel");
 const BookRequest = require("../models/bookRequestModel");
 
@@ -47,6 +48,8 @@ app.get("/login", authenticationController.getLogin);
 app.post("/login", authenticationController.postLogin);
 app.get("/register", authenticationController.getRegister);
 app.post("/register", authenticationController.postRegister);
+app.post("/oauth/login", oauth.googlesignin);
+
 
 // Library Routes
 app.get("/library", async (req, res) => {

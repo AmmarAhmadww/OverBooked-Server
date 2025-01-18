@@ -17,16 +17,16 @@ exports.getLogin = function (req, res) {
 // login authentication
 exports.postLogin = async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { email, password } = req.body;
 
         // Find user by username
-        const user = await User.findOne({ username });
+        const user = await User.findOne({ email });
         
         // If user doesn't exist
         if (!user) {
             return res.status(401).json({
                 success: false,
-                message: "Username not found"
+                message: "No user found on this email"
             });
         }
 
@@ -41,12 +41,7 @@ exports.postLogin = async (req, res) => {
         // Successful login
         res.json({
             success: true,
-            user: {
-                _id: user._id,
-                username: user.username,
-                isAdmin: user.isAdmin,
-                issuedBooks: user.issuedBooks || []
-            }
+            user
         });
 
     } catch (err) {
@@ -68,7 +63,7 @@ exports.getRegister = function (req, res) {
 // registration page
 exports.postRegister = async (req, res) => {
     try {
-        const { username, password, isAdmin, adminCode } = req.body;
+        const { username,email, password, isAdmin, adminCode } = req.body;
 
         // Check if trying to register as admin
         if (isAdmin) {
@@ -82,11 +77,11 @@ exports.postRegister = async (req, res) => {
         }
 
         // Check if username already exists
-        const existingUser = await User.findOne({ username });
+        const existingUser = await User.findOne({ email });
         if (existingUser) {
             return res.status(400).json({
                 success: false,
-                message: "Username already exists"
+                message: "User already exists on this email"
             });
         }
 
@@ -94,6 +89,7 @@ exports.postRegister = async (req, res) => {
         const newUser = new User({
             username,
             password,
+            email,
             isAdmin: isAdmin && adminCode === "4269"
         });
 
@@ -101,7 +97,8 @@ exports.postRegister = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Registration successful"
+            message: "Registration successful",
+            user:newUser
         });
     } catch (err) {
         console.error("Registration error:", err);
@@ -111,3 +108,4 @@ exports.postRegister = async (req, res) => {
         });
     }
 };
+
