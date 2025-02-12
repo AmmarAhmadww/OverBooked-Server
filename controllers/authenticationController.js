@@ -1,51 +1,73 @@
-const md5 = require('md5');
-const User = require("../models/userModel.js");
+const User = require("../models/userModel");
+const bcrypt = require("bcrypt");
 
 // GET
 // landing page for Overbooked
 exports.getWelcome = function (req, res) {
-    res.json({ message: "Welcome to Overbooked!" });
+    res.json({ message: "Welcome to the API" });
 }
 
 // GET
 // login page
 exports.getLogin = function (req, res) {
-    res.json({ message: "Login page", dangerMessage: "true" });
+    res.json({ message: "Login page" });
 }
 
 // POST
 // login authentication
 exports.postLogin = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { emailOrUsername, password } = req.body;
 
-        // Find user by username
-        const user = await User.findOne({ email });
-        
-        // If user doesn't exist
+        if (!emailOrUsername || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email/Username and password are required"
+            });
+        }
+
+        // Find user by either email or username
+        const user = await User.findOne({
+            $or: [
+                { email: emailOrUsername },
+                { username: emailOrUsername }
+            ]
+        });
+
         if (!user) {
             return res.status(401).json({
                 success: false,
-                message: "No user found on this email"
+                message: "Invalid credentials"
             });
         }
 
-        // Check password (assuming password is stored as plain text for now)
-        if (user.password !== password) {
+        // Compare password
+        const isValidPassword = await bcrypt.compare(password, user.password);
+        if (!isValidPassword) {
             return res.status(401).json({
                 success: false,
-                message: "Invalid password"
+                message: "Invalid credentials"
             });
         }
 
-        // Successful login
+        // Create user object without sensitive information
+        const userResponse = {
+            _id: user._id,
+            email: user.email,
+            username: user.username,
+            isAdmin: user.isAdmin,
+            issuedBooks: user.issuedBooks,
+            readingProgress: user.readingProgress
+        };
+
         res.json({
             success: true,
-            user
+            message: "Login successful",
+            user: userResponse
         });
 
-    } catch (err) {
-        console.error("Login error:", err);
+    } catch (error) {
+        console.error("Login error:", error);
         res.status(500).json({
             success: false,
             message: "An error occurred during login"
@@ -56,52 +78,74 @@ exports.postLogin = async (req, res) => {
 // GET
 // registration page
 exports.getRegister = function (req, res) {
-    res.json({ message: "Registration page", dangerMessage: "true" });
+    res.json({ message: "Register page" });
 }
 
 // POST
 // registration page
 exports.postRegister = async (req, res) => {
     try {
-        const { username,email, password, isAdmin, adminCode } = req.body;
+        const { email, username, password, isAdmin, adminCode } = req.body;
 
-        // Check if trying to register as admin
+        // Validate required fields
+        if (!email || !username || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email, username and password are required"
+            });
+        }
+
+        // Check if email already exists
+        const existingEmail = await User.findOne({ email });
+        if (existingEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Email already registered"
+            });
+        }
+
+        // Check if username already exists
+        const existingUsername = await User.findOne({ username });
+        if (existingUsername) {
+            return res.status(400).json({
+                success: false,
+                message: "Username already taken"
+            });
+        }
+
+        // Validate admin registration
         if (isAdmin) {
-            // Verify against hardcoded admin code
-            if (!adminCode || adminCode !== "4269") {
-                return res.status(403).json({
+            const correctAdminCode = "4269"; // Hardcoded admin code
+            if (adminCode !== correctAdminCode) {
+                return res.status(401).json({
                     success: false,
                     message: "Invalid admin registration code"
                 });
             }
         }
 
-        // Check if username already exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(400).json({
-                success: false,
-                message: "User already exists on this email"
-            });
-        }
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
         const newUser = new User({
-            username,
-            password,
             email,
-            isAdmin: isAdmin && adminCode === "4269"
+            username,
+            password: hashedPassword,
+            isAdmin: isAdmin || false,
+            issuedBooks: [],
+            readingProgress: {}
         });
 
         await newUser.save();
 
         res.status(201).json({
             success: true,
-            message: "Registration successful",
-            user:newUser
+            message: "Registration successful"
         });
-    } catch (err) {
-        console.error("Registration error:", err);
+
+    } catch (error) {
+        console.error("Registration error:", error);
         res.status(500).json({
             success: false,
             message: "An error occurred during registration"

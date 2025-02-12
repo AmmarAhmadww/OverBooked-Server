@@ -10,30 +10,48 @@ mongoose.connect(process.env.DB_URI, {
   .catch(err => console.log('Error connecting to database:', err));
 
 const userSchema = new mongoose.Schema({
-  username: String,
-  fullname: String,
-  password: String,
-  issuedBooks: [
-    {
-      bookName: String,
-      cover: String,
-      pdf: String,
-      bookID: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Library'
-      }
-    },
-  ],
   email: {
     type: String,
+    required: true,
     unique: true,
     trim: true,
     lowercase: true
   },
+  username: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true
+  },
   password: {
     type: String,
+    required: false // Make it completely optional
   },
-  picture:String,
+  googleId: {
+    type: String,
+    sparse: true,
+    unique: true
+  },
+  fullname: String,
+  issuedBooks: [{
+    bookID: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Library'
+    },
+    issueDate: Date,
+    returnDate: Date,
+    hasRead: {
+      type: Boolean,
+      default: false
+    }
+  }],
+  cover: String,
+  pdf: String,
+  bookID: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Library'
+  },
+  picture: String,
   numberOfIssuedBooks: Number,
   signedIn: Boolean,
   isAdmin: {
@@ -41,9 +59,29 @@ const userSchema = new mongoose.Schema({
     default: false
   },
   readingProgress: {
-    type: Object,
+    type: Map,
+    of: Number,
     default: {}
   }
+}, {
+  timestamps: true
+});
+
+// Only validate password during user registration/update
+userSchema.pre('save', function(next) {
+  // Skip validation if this is not a new user or password is not being modified
+  if (!this.isNew && !this.isModified('password')) {
+    return next();
+  }
+
+  // Only check password for new non-Google users
+  if (this.isNew && !this.googleId && !this.password) {
+    const err = new Error('Password is required for new non-Google users');
+    err.name = 'ValidationError';
+    return next(err);
+  }
+
+  next();
 });
 
 const User = mongoose.model("User", userSchema);

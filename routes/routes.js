@@ -8,6 +8,7 @@ const fs = require('fs');
 const OpenAI = require('openai');
 const fetch = require('node-fetch');
 const adminAuth = require('../middleware/adminAuth');
+const PDFDocument = require('pdf-lib').PDFDocument;
 
 // Import required models and controllers
 const User = require("../models/userModel");
@@ -23,24 +24,61 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    // Determine destination based on file type
-    const dest = file.fieldname === 'pdf' ? 'uploads/pdfs' : 'uploads/covers';
-    cb(null, dest);
-  },
-  filename: function (req, file, cb) {
-    // Create unique filename
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+// Ensure upload directories exist
+const uploadDir = path.join(__dirname, '../uploads');
+const coversDir = path.join(uploadDir, 'covers');
+const pdfsDir = path.join(uploadDir, 'pdfs');
+
+[uploadDir, coversDir, pdfsDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 });
 
-const upload = multer({ storage: storage });
+// Configure multer storage
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const dest = file.fieldname === 'pdf' ? pdfsDir : coversDir;
+    cb(null, dest);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+  }
+});
+
+// Create separate multer configurations for different upload types
+const uploadConfig = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    if (file.fieldname === 'cover') {
+      if (!file.mimetype.startsWith('image/')) {
+        return cb(new Error('Only image files are allowed!'), false);
+      }
+    } else if (file.fieldname === 'pdf') {
+      if (file.mimetype !== 'application/pdf') {
+        return cb(new Error('Only PDF files are allowed!'), false);
+      }
+    }
+    cb(null, true);
+  }
+});
+
+// Create separate upload middlewares for different purposes
+const uploadCover = uploadConfig.single('cover');
+const uploadPdf = uploadConfig.single('pdf');
+const uploadMultiple = uploadConfig.fields([
+  { name: 'cover', maxCount: 1 },
+  { name: 'pdf', maxCount: 1 }
+]);
 
 // Authentication Routes
 app.get("/", authenticationController.getWelcome);
@@ -228,33 +266,39 @@ app.post("/library/returnBook", async (req, res) => {
 // Admin Routes
 app.post("/admin/pending-requests", async (req, res) => {
     try {
+        // Find books with pending requests and populate user details
         const books = await Library.find({
-      'requests.status': 'pending'
-    }).populate('requests.userID', 'username email'); // Populate user details
+            "requests.status": "pending"
+        }).lean();
 
-    // Format the response to match your AdminPanel expectations
-    const formattedBooks = books.map(book => ({
+        // Format the response with proper null checks
+        const formattedBooks = books.map(book => ({
             _id: book._id,
             bookName: book.bookName,
             cover: book.cover,
             available: book.available,
-            requests: book.requests
-        .filter(req => req.status === 'pending')
+            requests: (book.requests || [])
+                .filter(req => req.status === "pending")
                 .map(req => ({
                     _id: req._id,
-          requestDate: req.requestDate,
+                    requestDate: req.requestDate,
                     user: {
-                        _id: req.userID._id,
-                        username: req.userID.username,
-                        email: req.userID.email
-          }
+                        _id: req.userID,
+                        username: req.userName || "Unknown User",
+                        email: req.userEmail || "No email provided"
+                    }
                 }))
-    }));
+        }))
+        // Filter out books with no pending requests
+        .filter(book => book.requests.length > 0);
 
-    res.json(formattedBooks);
+        res.json(formattedBooks);
     } catch (error) {
         console.error("Error fetching pending requests:", error);
-        res.status(500).json({ error: "Failed to fetch pending requests" });
+        res.status(500).json({ 
+            error: "Failed to fetch pending requests",
+            details: error.message 
+        });
     }
 });
 
@@ -327,45 +371,51 @@ app.post("/logout", (req, res) => {
     res.json({ message: "Logged out successfully" });
 });
 
-// Add this route for fetching issued books
+// Update the issued books route
 app.get("/library/issued-books/:userID", async (req, res) => {
-    try {
-        const { userID } = req.params;
+  try {
+    const { userID } = req.params;
     
     // Validate userID
     if (!userID) {
       return res.status(400).json({ error: "User ID is required" });
     }
 
-    // Find user and populate issued books with book details
+    // Find user and populate issued books
     const user = await User.findById(userID);
-        if (!user) {
-            return res.status(404).json({ error: "User not found" });
-        }
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     // Get full book details for each issued book
     const issuedBooksDetails = await Promise.all(
       user.issuedBooks.map(async (issuedBook) => {
         const book = await Library.findById(issuedBook.bookID);
+        const bookDetails = book ? {
+          bookName: book.bookName,
+          author: book.author,
+          cover: book.cover,
+          category: book.category,
+          rating: book.rating,
+          pdf: book.pdf,
+          description: book.description,
+          totalPages: book.totalPages || (book.pdf ? 700 : 100) // Default to 700 for PDFs
+        } : null;
         return {
-          ...issuedBook.toObject(),
-          bookDetails: book ? {
-            bookName: book.bookName,
-            author: book.author,
-            cover: book.cover,
-            category: book.category,
-            rating: book.rating,
-            pdf: book.pdf
-          } : null
+          bookID: issuedBook.bookID,
+          issueDate: issuedBook.issueDate,
+          returnDate: issuedBook.returnDate,
+          hasRead: issuedBook.hasRead,
+          bookDetails: bookDetails
         };
       })
     );
 
     res.json(issuedBooksDetails);
-    } catch (error) {
-        console.error("Error fetching issued books:", error);
+  } catch (error) {
+    console.error("Error fetching issued books:", error);
     res.status(500).json({ error: "Failed to fetch issued books" });
-    }
+  }
 });
 
 // Statistics Routes
@@ -454,45 +504,39 @@ app.post("/library/book/:bookID/progress", async (req, res) => {
     }
 });
 
-// Add this route after your existing routes
-app.post("/library/add-book", upload.fields([
-  { name: 'cover', maxCount: 1 },
-  { name: 'pdf', maxCount: 1 }
-]), async (req, res) => {
+// Update the add-book route to handle the combined upload
+app.post("/library/add-book", uploadMultiple, async (req, res) => {
   try {
-    const { bookName, author, rating, coverLink, available, total, category } = req.body;
+    const { bookName, author, rating, category, available, total } = req.body;
 
-    // Create new book document
+    // Get file paths if files were uploaded
+    const coverPath = req.files?.cover ? `/uploads/covers/${req.files.cover[0].filename}` : null;
+    const pdfPath = req.files?.pdf ? `/uploads/pdfs/${req.files.pdf[0].filename}` : null;
+
     const newBook = new Library({
       bookName,
       author,
-      category,
       rating: Number(rating) || 0,
+      category,
       available: Number(available) || 5,
       total: Number(total) || 5,
-      issued: 0,
-      cover: coverLink || (req.files?.cover ? `/uploads/covers/${req.files.cover[0].filename}` : null),
-      pdf: req.files?.pdf ? `/uploads/pdfs/${req.files.pdf[0].filename}` : null
+      cover: coverPath,
+      pdf: pdfPath
     });
 
     await newBook.save();
 
-    // Create notification for all users
-    const users = await User.find({}, '_id');
-    const notifications = users.map(user => ({
-      userId: user._id,
-      type: 'NEW_BOOK',
-      message: `New book added: "${bookName}" by ${author}`,
-      bookId: newBook._id,
-      read: false
-    }));
+    res.status(201).json({
+      message: 'Book added successfully',
+      book: newBook
+    });
 
-    await Notification.insertMany(notifications);
-
-    res.status(201).json({ message: 'Book added successfully', book: newBook });
   } catch (error) {
     console.error("Error adding book:", error);
-    res.status(500).json({ error: "Failed to add book" });
+    res.status(500).json({
+      error: "Failed to add book",
+      details: error.message
+    });
   }
 });
 
@@ -884,34 +928,56 @@ app.post("/notifications/:notificationId/read", async (req, res) => {
 // Add this to your routes
 app.post("/library/request-new-book", async (req, res) => {
   try {
-    const { userId, userName, bookName, author, description } = req.body;
-    
-    const newRequest = new BookRequest({
+    const { userId, userName, userEmail, bookName, author, description } = req.body;
+
+    // Validate all required fields
+    if (!userId || !userName || !userEmail || !bookName || !author || !description) {
+      return res.status(400).json({ 
+        success: false,
+        message: "All fields are required: userId, userName, userEmail, bookName, author, and description" 
+      });
+    }
+
+    // Create new book request
+    const bookRequest = new BookRequest({
       userId,
       userName,
+      userEmail,
       bookName,
       author,
       description,
-      status: 'pending',
+      status: "pending",
       requestDate: new Date()
     });
 
-    await newRequest.save();
+    await bookRequest.save();
 
     // Create notification for admins
     const admins = await User.find({ isAdmin: true }, '_id');
     const notifications = admins.map(admin => ({
       userId: admin._id,
-      type: 'BOOK_REQUEST',
+      type: 'NEW_BOOK_REQUEST',
       message: `New book request: "${bookName}" by ${author}`,
       read: false
     }));
 
-    await Notification.insertMany(notifications);
+    if (notifications.length > 0) {
+      await Notification.insertMany(notifications);
+    }
 
-    res.status(201).json({ message: 'Request submitted successfully' });
+    res.status(201).json({
+      success: true,
+      message: "Book request submitted successfully",
+      request: bookRequest
+    });
+
   } catch (error) {
-    res.status(500).json({ error: 'Failed to submit request' });
+    console.error("Error creating book request:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit book request",
+      error: error.message
+    });
   }
 });
 
@@ -950,6 +1016,180 @@ app.put("/library/book-requests/:requestId", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Failed to update request' });
   }
+});
+
+// Add this to your routes
+app.get('/library/preview/:bookId', async (req, res) => {
+  try {
+    const book = await Library.findById(req.params.bookId);
+    if (!book || !book.pdf) {
+      return res.status(404).json({ error: 'PDF not found' });
+    }
+
+    const pdfPath = `.${book.pdf}`; // Adjust path as needed
+    const existingPdfBytes = fs.readFileSync(pdfPath);
+    
+    // Load the PDF
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    
+    // Create a new document with only first 10 pages
+    const previewDoc = await PDFDocument.create();
+    const pageCount = Math.min(10, pdfDoc.getPageCount());
+    
+    for (let i = 0; i < pageCount; i++) {
+      const [page] = await previewDoc.copyPages(pdfDoc, [i]);
+      previewDoc.addPage(page);
+    }
+    
+    // Save the preview PDF
+    const previewBytes = await previewDoc.save();
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.send(Buffer.from(previewBytes));
+  } catch (error) {
+    console.error('Error creating preview:', error);
+    res.status(500).json({ error: 'Failed to create preview' });
+  }
+});
+
+// Add this route to your routes.js
+app.post("/library/rate", async (req, res) => {
+  try {
+    const { bookId, userId, rating } = req.body;
+
+    // Validate rating
+    if (rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "Rating must be between 1 and 5" });
+    }
+
+    // Check if user has issued this book
+    const user = await User.findById(userId);
+    const hasIssued = user.issuedBooks.some(book => book.bookID === bookId);
+
+    if (!hasIssued) {
+      return res.status(403).json({ error: "You can only rate books you have issued" });
+    }
+
+    // Get the book
+    const book = await Library.findById(bookId);
+    if (!book) {
+      return res.status(404).json({ error: "Book not found" });
+    }
+
+    // Update or add the rating
+    if (!book.ratings) {
+      book.ratings = [];
+    }
+
+    // Check if user has already rated
+    const existingRatingIndex = book.ratings.findIndex(r => r.userId === userId);
+
+    if (existingRatingIndex !== -1) {
+      // Update existing rating
+      book.ratings[existingRatingIndex].rating = rating;
+    } else {
+      // Add new rating
+      book.ratings.push({ userId, rating });
+    }
+
+    // Calculate new average rating
+    const newRating = book.ratings.reduce((acc, r) => acc + r.rating, 0) / book.ratings.length;
+    book.rating = Math.round(newRating * 10) / 10; // Round to 1 decimal place
+
+    await book.save();
+
+    res.json({ success: true, newRating: book.rating });
+  } catch (error) {
+    console.error("Error rating book:", error);
+    res.status(500).json({ error: "Failed to rate book" });
+  }
+});
+
+// Add this new route to get total users count
+app.get("/users/count", async (req, res) => {
+  try {
+    // Count all users in the database
+    const count = await User.countDocuments();
+    
+    res.json({ count });
+  } catch (error) {
+    console.error("Error fetching user count:", error);
+    res.status(500).json({ 
+      error: "Failed to fetch user count",
+      details: error.message 
+    });
+  }
+});
+
+// Update the routes to use the correct upload middleware
+app.post("/library/upload-cover", uploadCover, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No cover file provided" });
+    }
+
+    const { bookId } = req.body;
+    const book = await Library.findById(bookId);
+    if (!book) {
+      return res.status(404).json({ error: "Book not found" });
+    }
+
+    book.cover = `/uploads/covers/${req.file.filename}`;
+    await book.save();
+
+    res.json({ 
+      success: true,
+      message: "Cover uploaded successfully",
+      path: book.cover
+    });
+  } catch (error) {
+    console.error("Cover upload error:", error);
+    res.status(500).json({ 
+      error: "Failed to upload cover",
+      details: error.message 
+    });
+  }
+});
+
+app.post("/library/upload-pdf", uploadPdf, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No PDF file provided" });
+    }
+
+    const { bookId } = req.body;
+    const book = await Library.findById(bookId);
+    if (!book) {
+      return res.status(404).json({ error: "Book not found" });
+    }
+
+    book.pdf = `/uploads/pdfs/${req.file.filename}`;
+    await book.save();
+
+    res.json({ 
+      success: true,
+      message: "PDF uploaded successfully",
+      path: book.pdf
+    });
+  } catch (error) {
+    console.error("PDF upload error:", error);
+    res.status(500).json({ 
+      error: "Failed to upload PDF",
+      details: error.message 
+    });
+  }
+});
+
+// Serve static files
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Error:', error);
+  res.status(500).json({
+    error: "Server error",
+    details: error.message
+  });
 });
 
 module.exports = app;

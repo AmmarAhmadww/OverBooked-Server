@@ -2,14 +2,16 @@ const express = require('express');
 const ejs = require('ejs');
 const path = require('path');
 const cors = require('cors');
+const mongoose = require('mongoose');
 const app = express();
 
 
-// Enable CORS (either globally or with specific origins)
+// Update CORS configuration
 app.use(cors({
-    origin: 'http://localhost:5173',  // React development server
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type'],
+  origin: 'http://localhost:5173', // Frontend URL
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true // Add this to allow credentials
 }));
 
 // Add preflight handling
@@ -43,6 +45,51 @@ app.get('/home', (req, res) => {
 // Fallback route for React
 app.get('*', (req, res) => {
     res.sendFile(path.join(reactBuildPath, 'index.html'));
+});
+
+// MongoDB Connection with better error handling and options
+mongoose.connect(process.env.DB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+})
+.then(() => {
+  console.log('Connected to MongoDB successfully');
+})
+.catch((err) => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1); // Exit with failure
+});
+
+// Handle connection errors after initial connection
+mongoose.connection.on('error', err => {
+  console.error('MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('MongoDB disconnected. Attempting to reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('MongoDB reconnected');
+});
+
+// Close MongoDB connection when Node process ends
+process.on('SIGINT', async () => {
+  try {
+    await mongoose.connection.close();
+    console.log('MongoDB connection closed through app termination');
+    process.exit(0);
+  } catch (err) {
+    console.error('Error closing MongoDB connection:', err);
+    process.exit(1);
+  }
+});
+
+const PORT = process.env.PORT || 5001;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
 
 module.exports = app;

@@ -41,20 +41,24 @@ const librarySchema = new mongoose.Schema({
   },
   available: {
     type: Number,
-    required: true
+    default: 5
   },
   total: {
     type: Number,
-    required: true
+    default: 5
   },
-  cover: String,
+  cover: {
+    type: String,
+    required: false
+  },
   rating: {
     type: Number,
-    min: 0,
-    max: 5,
     default: 0
   },
-  pdf: String,
+  pdf: {
+    type: String,
+    required: false
+  },
   readCount: {
     type: Number,
     default: 0
@@ -68,14 +72,20 @@ const librarySchema = new mongoose.Schema({
     userName: String,
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected', 'returned'],
+      enum: ['pending', 'approved', 'declined'],
       default: 'pending'
     },
     requestDate: {
       type: Date,
       default: Date.now
     }
-  }]
+  }],
+  description: {
+    type: String,
+    default: ''
+  },
+}, {
+  timestamps: true
 });
 
 

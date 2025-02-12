@@ -5,51 +5,55 @@ const router = express.Router();
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 exports.googlesignin = async (req, res) => {
-    const { id_token } = req.body;
-    
-    if (!id_token) {
-      return res.status(400).json({ message: 'Invalid token'});
-    }
-  
-    try {
-      const ticket = await googleClient.verifyIdToken({
-        idToken: id_token,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-      const payload = ticket.getPayload();
-      const verifiedEmail = payload.email;
-  
-      if (!verifiedEmail) {
-        throw new UnauthenticatedError("Invalid Token or expired");
+  try {
+    const { email, name, googleId, picture } = req.body;
+
+    // Check if user already exists
+    let user = await User.findOne({ email });
+
+    if (user) {
+      // Update existing user's Google info if needed
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.picture = picture || user.picture;
+        await user.save();
       }
-  
-      let user = await User.findOne({ email: verifiedEmail });
-  
-      if (user) {
-  
-        return res.status(200).json({user,access_token:true});
-      }
-  
+    } else {
+      // Create new user with Google info
+      const username = email.split('@')[0] + Math.random().toString(36).slice(-4);
       user = new User({
-        email: verifiedEmail,
-        username: payload.name,
-        picture: payload.picture
+        email,
+        username,
+        googleId,
+        fullname: name,
+        picture,
+        issuedBooks: [],
+        numberOfIssuedBooks: 0,
+        signedIn: true,
+        readingProgress: {}
       });
-  
       await user.save();
-  
-      res.status(200).json({
-        user: {
-          full_name: `${user.first_name} ${user.last_name}`,
-          id: user.id,
-          username: user.username,
-          picture: user.picture,
-          email: user.email,
-        },
-        access_token: true,
-      });
-    } catch (error) {
-      console.error(error);
-      throw error;
     }
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        email: user.email,
+        username: user.username,
+        isAdmin: user.isAdmin,
+        picture: user.picture,
+        issuedBooks: user.issuedBooks,
+        readingProgress: user.readingProgress
+      }
+    });
+
+  } catch (error) {
+    console.error("Google sign-in error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error during Google sign-in",
+      error: error.message
+    });
+  }
 };

@@ -10,6 +10,10 @@ const bookRequestSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  userEmail: {
+    type: String,
+    required: true
+  },
   bookName: {
     type: String,
     required: true

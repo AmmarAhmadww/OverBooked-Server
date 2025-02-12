@@ -1,24 +1,37 @@
-const adminAuth = (req, res, next) => {
+const User = require("../models/userModel");
+
+const adminAuth = async (req, res, next) => {
   try {
-    let user;
-    
-    // Check if user data is in form data
-    if (req.body.user) {
-      user = typeof req.body.user === 'string' ? JSON.parse(req.body.user) : req.body.user;
+    // Check Authorization header first
+    const authHeader = req.headers.authorization;
+    let userId = null;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      userId = authHeader.split(' ')[1];
+    } else {
+      // Fallback to body if no header
+      userId = req.body.userId;
     }
 
-    if (!user || !user.isAdmin) {
-      return res.status(403).json({ 
-        error: "Access denied. Admin privileges required." 
-      });
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
     }
-    
-    // Add user to request for later use if needed
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    if (!user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    // Add user to request object for use in route handlers
     req.user = user;
     next();
   } catch (error) {
-    console.error('Auth error:', error);
-    res.status(401).json({ error: "Authentication failed" });
+    console.error("Admin auth error:", error);
+    res.status(500).json({ error: "Authentication failed" });
   }
 };
 
