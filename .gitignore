@@ -1,3 +1,6 @@
 node_modules
 models/.env
 .env
+__pycache__/
+*.pyc
+db.sqlite3
